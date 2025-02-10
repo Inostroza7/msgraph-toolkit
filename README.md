@@ -1,17 +1,16 @@
-# 📚 MsGraph Toolkit
+# 🌐 Microsoft Graph Toolkit
 
-Una potente librería Python para interactuar con Microsoft Graph API de forma sencilla y eficiente.
+Cliente Python para interactuar con Microsoft Graph API de forma sencilla y eficiente.
 
 ## ✨ Características
 
 - 🔄 Soporte para operaciones síncronas y asíncronas
-- 🔐 Autenticación mediante Client Credentials Flow
-- 📧 Gestión completa de correos electrónicos
-- 📁 Manejo de archivos y carpetas en OneDrive/SharePoint
+- 📨 Gestión de correos y archivos adjuntos
+- 💾 Manejo de OneDrive y SharePoint
 - 👥 Administración de usuarios
-- 📝 Logging detallado
-- ⚡ Optimizado para rendimiento
-- 🛡️ Manejo robusto de errores
+- 🔐 Autenticación mediante client credentials flow
+- 📝 Logging integrado
+- ⚡ Cliente HTTP moderno con httpx
 
 ## 🚀 Instalación
 
@@ -19,40 +18,58 @@ Una potente librería Python para interactuar con Microsoft Graph API de forma s
 pip install msgraph-toolkit
 ```
 
-## 🔧 Configuración
+## 🛠️ Configuración
 
 1. Registra una aplicación en Azure Portal
 2. Configura las variables de entorno:
 
 ```bash
-CLIENT_ID=tu_client_id
-CLIENT_SECRET=tu_client_secret
-TENANT_ID=tu_tenant_id
-```README.md
+CLIENT_ID="tu-client-id"
+CLIENT_SECRET="tu-client-secret"
+TENANT_ID="tu-tenant-id"
+```
 
-O pasa las credenciales directamente al constructor:
+O pasa las credenciales directamente al inicializar el cliente:
 
 ```python
-client = AsyncMsGraph(
-    client_id="tu_client_id",
-    client_secret="tu_client_secret", 
-    tenant_id="tu_tenant_id"
+from msgraph_toolkit import MsGraph
+
+client = MsGraph(
+    client_id="tu-client-id",
+    client_secret="tu-client-secret",
+    tenant_id="tu-tenant-id"
 )
 ```
 
-## 📝 Ejemplos de Uso
+## 📚 Uso
+
+### Cliente Síncrono
+
+```python
+from msgraph_toolkit import MsGraph
+
+# Inicializar cliente
+client = MsGraph()
+
+# Listar usuarios
+users = client.users.list_users(
+    select="displayName,mail",
+    filter="startsWith(displayName,'A')"
+)
+
+# Obtener drives
+drives = client.drives.list_drives(user_id="user@domain.com")
+```
 
 ### Cliente Asíncrono
 
 ```python
 from msgraph_toolkit import AsyncMsGraph
+import asyncio
 
 async def main():
     # Inicializar cliente
     client = AsyncMsGraph()
-    
-    # Obtener token
-    await client.get_token()
     
     # Listar mensajes
     messages = await client.mails.list_messages(
@@ -66,74 +83,126 @@ async def main():
         user_id="user@domain.com"
     )
 
+asyncio.run(main())
 ```
 
-### Cliente Síncrono
+## 📦 Módulos
+
+### 📧 Mails
+
+Gestión de correos electrónicos:
 
 ```python
-from msgraph_toolkit import MsGraph
+# Listar mensajes
+messages = client.mails.list_messages(
+    select="subject,from,receivedDateTime",
+    filter="receivedDateTime ge 2024-01-01",
+    top=50
+)
 
-# Inicializar cliente
-client = MsGraph()
+# Crear y enviar mensaje
+message = client.mails.create_message(
+    subject="Asunto",
+    body="Contenido del mensaje",
+    to_recipients=["user@domain.com"],
+    body_type="HTML"
+)
+client.mails.send_message(message['id'])
 
-# Obtener token
-client.get_token()
-
-# Listar archivos
-files = client.drives.list_items(
-    user_id="user@domain.com",
-    select="name,size,lastModifiedDateTime"
+# Adjuntar archivo
+client.mails.add_attachment(
+    message_id=message['id'],
+    file_path="documento.pdf"
 )
 ```
 
-## 📦 Módulos Principales
+### 💾 Drives
 
-### 📧 Mails
-- Listar mensajes
-- Crear borradores
-- Enviar correos
-- Gestionar adjuntos
+Operaciones con OneDrive y SharePoint:
 
-### 📁 Drives
-- Listar drives/carpetas
-- Crear carpetas
-- Subir/descargar archivos
-- Rastrear cambios
+```python
+# Listar archivos
+items = client.drives.list_items(
+    user_id="user@domain.com",
+    select="name,size,lastModifiedDateTime"
+)
+
+# Crear carpeta
+folder = client.drives.create_folder(
+    name="Nueva Carpeta",
+    user_id="user@domain.com"
+)
+
+# Descargar archivo
+content = client.drives.download_content(
+    item_id="item-id",
+    user_id="user@domain.com"
+)
+```
 
 ### 👥 Users
-- Obtener información de usuarios
-- Gestionar perfiles
-- Administrar permisos
 
-## ⚙️ Configuración Avanzada
+Gestión de usuarios:
 
-### Logging
+```python
+# Listar usuarios
+users = client.users.list_users(
+    select="displayName,mail,jobTitle",
+    filter="accountEnabled eq true"
+)
+
+# Obtener usuario específico
+user = client.users.get_user(
+    user_id="user@domain.com",
+    select="displayName,mail,department"
+)
+```
+
+## 🔑 Permisos
+
+Los permisos requeridos dependen de las operaciones:
+
+- `Mail.Read`: Leer correos
+- `Mail.ReadWrite`: Crear/modificar correos
+- `Mail.Send`: Enviar correos
+- `Files.Read`: Leer archivos
+- `Files.ReadWrite`: Crear/modificar archivos
+- `User.Read.All`: Leer usuarios
+
+## ⚠️ Manejo de Errores
+
+La librería incluye manejo de errores específicos:
+
+```python
+try:
+    messages = client.mails.list_messages()
+except PermissionError:
+    print("No tiene los permisos necesarios")
+except ValueError:
+    print("Parámetros inválidos")
+except Exception as e:
+    print(f"Error: {str(e)}")
+```
+
+## 📝 Logging
+
+La librería utiliza logging integrado:
 
 ```python
 from msgraph_toolkit.core.log import Log
 
-# Configurar nivel de logging
-Log.set_level("DEBUG")
+logger = Log(__name__)
+logger.setLevel("DEBUG")
 ```
-
-### Manejo de Errores
-
-La librería incluye manejo detallado de errores comunes:
-- 🔒 Errores de autenticación
-- 📛 Errores de permisos
-- 🚫 Límites de tamaño
-- ⏱️ Timeouts
 
 ## 🤝 Contribuir
 
-Las contribuciones son bienvenidas! Por favor:
-
-1. 🍴 Fork el repositorio
-2. 🔧 Crea una rama para tu feature
-3. 📝 Commit tus cambios
-4. 🚀 Push a la rama
-5. ✅ Crea un Pull Request
+1. Fork el repositorio
+2. Crea una rama (`git checkout -b feature/nueva-caracteristica`)
+3. Commit tus cambios (`git commit -m 'Agrega nueva característica'`)
+4. Push a la rama (`git push origin feature/nueva-caracteristica`)
+5. Abre un Pull Request
 
 ## 📄 Licencia
 
-Este proyecto está licenciado bajo MIT License.
+Este proyecto está bajo la Licencia MIT. Ver el archivo `LICENSE` para más detalles.
