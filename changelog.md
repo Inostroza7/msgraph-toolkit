@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.2] - 12-02-2025
+
+### Añadido
+
+- **Módulo `Drives`:** Implementación síncrona completada
+  - **`create_folder`:** Crea carpetas con manejo de conflictos y permisos
+  - Soporte para crear en raíz o subcarpetas
+  - Validación de parámetros y manejo de errores mejorado
+
 ## [0.1.1] - 11-02-2025
 
 ### Cambiado

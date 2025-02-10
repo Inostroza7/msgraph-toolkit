@@ -1569,3 +1569,102 @@ class Drives:
                 logger.error("Error 404: Archivo no encontrado")
                 raise FileNotFoundError("El archivo solicitado no existe") from e
             raise
+
+    def create_folder(
+        self,
+        name: str,
+        parent_id: Optional[str] = None,
+        drive_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        group_id: Optional[str] = None,
+        site_id: Optional[str] = None,
+        conflict_behavior: str = "rename"
+    ) -> dict:
+        """
+        Crea una nueva carpeta en un drive.
+        
+        Args:
+            name (str): Nombre de la carpeta a crear
+            parent_id (str, optional): ID de la carpeta padre. Si no se proporciona, se crea en la raíz
+            drive_id (str, optional): ID del drive
+            user_id (str, optional): ID del usuario
+            group_id (str, optional): ID del grupo
+            site_id (str, optional): ID del sitio
+            conflict_behavior (str, optional): Comportamiento en caso de conflicto ('rename', 'replace', 'fail')
+            
+        Returns:
+            dict: Información de la carpeta creada
+        """
+        try:
+            if not self.client.token:
+                self.client.get_token()
+                
+            # Validar que se proporcione al menos un identificador
+            identifiers = [i for i in [drive_id, user_id, group_id, site_id] if i is not None]
+            if len(identifiers) == 0:
+                raise ValueError("Debe proporcionar uno de: drive_id, user_id, group_id, site_id")
+            if len(identifiers) > 1:
+                raise ValueError("Solo puede proporcionar uno de: drive_id, user_id, group_id, site_id")
+                
+            # Validar conflict_behavior
+            if conflict_behavior not in ['rename', 'replace', 'fail']:
+                raise ValueError("conflict_behavior debe ser 'rename', 'replace' o 'fail'")
+                
+            # Construir URL base
+            if drive_id:
+                base_url = f"{self.client.base_url}/drives/{drive_id}"
+            elif user_id:
+                base_url = f"{self.client.base_url}/users/{user_id}/drive"
+            elif group_id:
+                base_url = f"{self.client.base_url}/groups/{group_id}/drive"
+            elif site_id:
+                base_url = f"{self.client.base_url}/sites/{site_id}/drive"
+            else:
+                raise ValueError("Debe proporcionar uno de: drive_id, user_id, group_id, site_id")
+                
+            # Construir URL final
+            if parent_id:
+                url = f"{base_url}/items/{parent_id}/children"
+            else:
+                url = f"{base_url}/root/children"
+                
+            # Datos de la carpeta a crear
+            data = {
+                "name": name,
+                "folder": {},
+                "@microsoft.graph.conflictBehavior": conflict_behavior
+            }
+                
+            # Headers
+            headers = {
+                'Authorization': f'Bearer {self.client.token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # Realizar petición POST síncrona
+            with httpx.Client() as client:
+                response = client.post(url, json=data, headers=headers)
+                response.raise_for_status()
+                
+                logger.info(f"Carpeta '{name}' creada exitosamente")
+                return response.json()
+                
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                logger.error("Error 400: Solicitud incorrecta")
+                if "insufficient privileges" in e.response.text.lower():
+                    raise PermissionError(
+                        "No tiene los permisos necesarios. Se requiere Files.ReadWrite o Files.ReadWrite.All"
+                    ) from e
+            elif e.response.status_code == 401:
+                logger.error("Error 401: No autorizado")
+                raise PermissionError(
+                    "Token no válido o expirado. Asegúrese de tener los permisos Files.ReadWrite o Files.ReadWrite.All"
+                ) from e
+            elif e.response.status_code == 403:
+                logger.error("Error 403: Prohibido")
+                raise PermissionError(
+                    "No tiene permisos para crear carpetas en este drive. " 
+                    "Se requiere Files.ReadWrite o Files.ReadWrite.All"
+                ) from e
+            raise
