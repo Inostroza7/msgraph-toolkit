@@ -8,7 +8,7 @@ from .toolkit.drives import Drives
 from .toolkit.mails import Mails
 logger = Log(__name__)
 
-class SyncMsGraph(MsGraphBase):
+class MsGraph(MsGraphBase):
     """Implementación síncrona del cliente Microsoft Graph"""
 
     def __init__(self, *args, **kwargs):
