@@ -1045,4 +1045,276 @@ class Mails:
                     "El adjunto excede el límite permitido de 3MB"
                 ) from e
             raise
+
+    def create_message(
+        self,
+        subject: str,
+        body: str,
+        to_recipients: list,
+        user_id: Optional[str] = None,
+        folder_id: Optional[str] = None,
+        body_type: str = "HTML",
+        importance: str = "normal",
+        cc_recipients: Optional[list] = None,
+        bcc_recipients: Optional[list] = None,
+        reply_to: Optional[list] = None,
+        message_headers: Optional[list[dict]] = None,
+        mime_content: Optional[str] = None
+    ) -> dict:
+        """
+        Crea un borrador de mensaje nuevo.
+        
+        Args:
+            subject (str): Asunto del mensaje
+            body (str): Contenido del mensaje
+            to_recipients (list): Lista de destinatarios en formatos flexibles:
+                - ["user@domain.com"]
+                - [("user@domain.com", "User Name")]
+                - [{"address": "user@domain.com", "name": "User Name"}]
+            user_id (str, optional): ID o userPrincipalName del usuario
+            folder_id (str, optional): ID de la carpeta donde crear el borrador
+            body_type (str): Tipo de contenido del cuerpo ('HTML' o 'text')
+            importance (str): Importancia del mensaje ('low', 'normal', 'high')
+            cc_recipients (list, optional): Lista de destinatarios en copia
+            bcc_recipients (list, optional): Lista de destinatarios en copia oculta
+            reply_to (list, optional): Lista de direcciones de respuesta
+            message_headers (list[dict], optional): Headers personalizados del mensaje
+            mime_content (str, optional): Contenido MIME codificado en base64
+        """
+        try:
+            if not self.client.token:
+                self.client.get_token()
+                
+            # Validaciones igual que AsyncMails
+            if not user_id and not self.client.is_delegated:
+                raise ValueError(
+                    "Debe proporcionar user_id cuando usa client credentials. "
+                    "Para acceder a /me use autenticación delegada"
+                )
+                
+            if mime_content:
+                if any([body, subject, to_recipients, message_headers]):
+                    raise ValueError(
+                        "Cuando se proporciona mime_content no se pueden usar "
+                        "otros parámetros del mensaje"
+                    )
+            else:
+                if not all([subject, body, to_recipients]):
+                    raise ValueError(
+                        "Debe proporcionar subject, body y to_recipients"
+                    )
+                if body_type.upper() not in ['HTML', 'TEXT']:
+                    raise ValueError("body_type debe ser 'HTML' o 'text'")
+                if importance.lower() not in ['low', 'normal', 'high']:
+                    raise ValueError("importance debe ser 'low', 'normal' o 'high'")
+                
+            # Construir URL
+            if user_id:
+                base_url = f"{self.client.base_url}/users/{user_id}"
+            else:
+                base_url = f"{self.client.base_url}/me"
+                
+            if folder_id:
+                url = f"{base_url}/mailFolders/{folder_id}/messages"
+            else:
+                url = f"{base_url}/messages"
+                
+            # Headers
+            request_headers = {
+                'Authorization': f'Bearer {self.client.token}',
+                'Content-Type': 'text/plain' if mime_content else 'application/json'
+            }
+            
+            # Datos del mensaje
+            if mime_content:
+                data = mime_content
+            else:
+                data = {
+                    "subject": subject,
+                    "importance": importance.lower(),
+                    "body": {
+                        "contentType": body_type.lower(),
+                        "content": body
+                    },
+                    "toRecipients": self._process_recipients(to_recipients)
+                }
+                
+                if cc_recipients:
+                    data["ccRecipients"] = self._process_recipients(cc_recipients)
+                if bcc_recipients:
+                    data["bccRecipients"] = self._process_recipients(bcc_recipients)
+                if reply_to:
+                    data["replyTo"] = self._process_recipients(reply_to)
+                    
+            if message_headers and len(message_headers) > 0:
+                for header in message_headers:
+                    if not isinstance(header, dict) or 'name' not in header or 'value' not in header:
+                        raise ValueError(
+                            "Formato inválido de message_headers. Debe ser: "
+                            '[{"name": "x-custom-header", "value": "custom value"}]'
+                        )
+                data["internetMessageHeaders"] = message_headers
+            
+            # Realizar petición POST síncrona
+            with httpx.Client() as client:
+                response = client.post(
+                    url, 
+                    content=data if mime_content else None,
+                    json=data if not mime_content else None,
+                    headers=request_headers
+                )
+                response.raise_for_status()
+                
+                logger.info(f"Borrador creado exitosamente")
+                return response.json()
+                
+        except httpx.HTTPStatusError as e:
+            # Manejo de errores igual que AsyncMails
+            if e.response.status_code == 400:
+                logger.error("Error 400: Solicitud incorrecta")
+                if "Invalid base64 string" in e.response.text:
+                    raise ValueError(
+                        "El contenido MIME proporcionado no es una cadena base64 válida"
+                    ) from e
+                if "insufficient privileges" in e.response.text.lower():
+                    raise PermissionError(
+                        "No tiene los permisos necesarios. Se requiere Mail.ReadWrite"
+                    ) from e
+            elif e.response.status_code == 401:
+                logger.error("Error 401: No autorizado")
+                raise PermissionError(
+                    "Token no válido o expirado. Asegúrese de tener los permisos Mail.ReadWrite"
+                ) from e
+            elif e.response.status_code == 403:
+                logger.error("Error 403: Prohibido")
+                raise PermissionError(
+                    "No tiene permisos para crear mensajes. Se requiere Mail.ReadWrite"
+                ) from e
+            elif e.response.status_code == 413:
+                logger.error("Error 413: Contenido demasiado grande")
+                raise ValueError(
+                    "El contenido MIME excede el límite de 4MB"
+                ) from e
+            raise
+
+    def send_message(
+        self,
+        message_id: str,
+        user_id: Optional[str] = None
+    ) -> None:
+        """
+        Envía un mensaje en borrador existente.
+        
+        Args:
+            message_id (str): ID del mensaje en borrador
+            user_id (str, optional): ID o userPrincipalName del usuario
+        """
+        try:
+            if not self.client.token:
+                self.client.get_token()
+                
+            # Validaciones
+            if not user_id and not self.client.is_delegated:
+                raise ValueError(
+                    "Debe proporcionar user_id cuando usa client credentials. "
+                    "Para acceder a /me use autenticación delegada"
+                )
+                
+            if not message_id:
+                raise ValueError("Debe proporcionar message_id")
+                
+            # Construir URL
+            if user_id:
+                base_url = f"{self.client.base_url}/users/{user_id}"
+            else:
+                base_url = f"{self.client.base_url}/me"
+                
+            url = f"{base_url}/messages/{message_id}/send"
+                
+            # Headers
+            headers = {
+                'Authorization': f'Bearer {self.client.token}',
+                'Content-Length': '0'
+            }
+            
+            # Realizar petición POST síncrona
+            with httpx.Client() as client:
+                response = client.post(url, headers=headers)
+                
+                if response.status_code == 202:
+                    logger.info("Mensaje enviado exitosamente")
+                    return
+                    
+                response.raise_for_status()
+                
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                logger.error("Error 400: Solicitud incorrecta")
+                if "insufficient privileges" in e.response.text.lower():
+                    raise PermissionError(
+                        "No tiene los permisos necesarios. Se requiere Mail.Send"
+                    ) from e
+            elif e.response.status_code == 401:
+                logger.error("Error 401: No autorizado")
+                raise PermissionError(
+                    "Token no válido o expirado. Asegúrese de tener los permisos Mail.Send"
+                ) from e
+            elif e.response.status_code == 403:
+                logger.error("Error 403: Prohibido")
+                raise PermissionError(
+                    "No tiene permisos para enviar mensajes. Se requiere Mail.Send"
+                ) from e
+            elif e.response.status_code == 404:
+                logger.error("Error 404: Mensaje no encontrado")
+                raise ValueError(
+                    "El mensaje especificado no existe o no es un borrador"
+                ) from e
+            raise
+
+    def _process_recipients(self, recipients: list) -> list[dict]:
+        """
+        Procesa una lista de destinatarios en diferentes formatos y los convierte al formato requerido.
+        
+        Args:
+            recipients (list): Lista de destinatarios en cualquiera de estos formatos:
+                - string (email): "user@domain.com"
+                - tuple (email, name): ("user@domain.com", "User Name")
+                - dict: {"address": "user@domain.com", "name": "User Name"}
+                - dict: {"emailAddress": {"address": "user@domain.com", "name": "User Name"}}
+        """
+        processed = []
+        
+        for recipient in recipients:
+            if isinstance(recipient, str):
+                processed.append({
+                    "emailAddress": {
+                        "address": recipient,
+                        "name": ""
+                    }
+                })
+            elif isinstance(recipient, tuple):
+                email, name = recipient if len(recipient) > 1 else (recipient[0], "")
+                processed.append({
+                    "emailAddress": {
+                        "address": email,
+                        "name": name
+                    }
+                })
+            elif isinstance(recipient, dict):
+                if "emailAddress" in recipient:
+                    processed.append(recipient)
+                else:
+                    processed.append({
+                        "emailAddress": {
+                            "address": recipient.get("address"),
+                            "name": recipient.get("name", "")
+                        }
+                    })
+            else:
+                raise ValueError(
+                    f"Formato de destinatario no soportado: {recipient}. "
+                    "Use string, tuple o dict"
+                )
+                
+        return processed
     
