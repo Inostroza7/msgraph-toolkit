@@ -337,36 +337,35 @@ class AsyncMails:
             user_id (str, optional): ID o userPrincipalName del usuario
             
         Raises:
-            ValueError: Si los parámetros no son válidos
-            HTTPStatusError: Si hay error en la petición
+            ValueError: Si no se proporciona message_id
             PermissionError: Si no se tienen los permisos necesarios
             
-        Note:
-            - El mensaje debe ser un borrador existente (nuevo, respuesta o reenvío)
-            - El mensaje se guarda automáticamente en la carpeta "Elementos enviados"
+        Example:
+            >>> mails.send_message(
+            ...     message_id="123",
+            ...     user_id="user@domain.com"
+            ... )
         """
         try:
             if not self.client.token:
                 await self.client.get_token()
                 
-            # Validar que se proporcione user_id con client credentials
+            # Validaciones
             if not user_id and not self.client.is_delegated:
                 raise ValueError(
                     "Debe proporcionar user_id cuando usa client credentials. "
                     "Para acceder a /me use autenticación delegada"
                 )
                 
-            # Validar message_id
             if not message_id:
                 raise ValueError("Debe proporcionar message_id")
                 
-            # Construir URL base
+            # Construir URL
             if user_id:
                 base_url = f"{self.client.base_url}/users/{user_id}"
             else:
                 base_url = f"{self.client.base_url}/me"
                 
-            # Construir URL final
             url = f"{base_url}/messages/{message_id}/send"
                 
             # Headers
@@ -379,7 +378,6 @@ class AsyncMails:
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, headers=headers)
                 
-                # Manejar 202 Accepted
                 if response.status_code == 202:
                     logger.info("Mensaje enviado exitosamente")
                     return
@@ -408,92 +406,135 @@ class AsyncMails:
                 raise ValueError(
                     "El mensaje especificado no existe o no es un borrador"
                 ) from e
-            raise  # Re-lanza otros errores HTTP
+            raise
     
     async def add_attachment(
         self,
         message_id: str,
-        file_path: str,
+        file_path: Optional[str] = None,
+        content: Optional[bytes] = None,
+        file_name: Optional[str] = None,
         user_id: Optional[str] = None,
         is_inline: bool = False,
+        content_type: Optional[str] = None,
     ) -> dict:
         """
         Agrega un archivo adjunto a un mensaje de forma simplificada.
         
         Args:
             message_id (str): ID del mensaje
-            file_path (str): Ruta al archivo que se quiere adjuntar 
+            file_path (str, optional): Ruta al archivo que se quiere adjuntar
+            content (bytes, optional): Contenido del archivo en bytes
+            file_name (str, optional): Nombre del archivo cuando se usa content
             user_id (str, optional): ID o userPrincipalName del usuario
             is_inline (bool): Si el adjunto debe mostrarse en línea en el mensaje
+            content_type (str, optional): Tipo MIME del contenido
             
         Returns:
             dict: Información del adjunto creado
             
-        Note:
-            - Para archivos menores a 3MB usa una carga directa
-            - Para archivos entre 3MB y 150MB usa una sesión de carga por rangos
+        Raises:
+            ValueError: Si no se proporciona file_path o content+file_name
+            FileNotFoundError: Si no se encuentra el archivo
+            
+        Example:
+            # Usando ruta de archivo
+            >>> await mails.add_attachment(
+            ...     message_id="123",
+            ...     file_path="documento.pdf"
+            ... )
+            
+            # Usando bytes
+            >>> with open('documento.pdf', 'rb') as f:
+            ...     content = f.read()
+            >>> await mails.add_attachment(
+            ...     message_id="123",
+            ...     content=content,
+            ...     file_name="documento.pdf"
+            ... )
         """
-        # Validar que el archivo existe
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
-        
-        # Obtener tamaño y tipo del archivo
-        file_size = os.path.getsize(file_path)
-        content_type, _ = mimetypes.guess_type(file_path)
-        if not content_type:
-            content_type = 'application/octet-stream'
-        
-        # Obtener nombre del archivo
-        file_name = os.path.basename(file_path)
-        
-        # Para archivos pequeños (<3MB) usar carga directa
-        if file_size <= 3 * 1024 * 1024:
-            with open(file_path, 'rb') as f:
-                content_bytes = base64.b64encode(f.read()).decode()
-            return await self._add_attachment_raw(
+        # Validar que se proporcione al menos una forma de contenido
+        if file_path is None and (content is None or file_name is None):
+            raise ValueError(
+                "Debe proporcionar file_path o la combinación de content y file_name"
+            )
+        if file_path is not None and (content is not None or file_name is not None):
+            raise ValueError(
+                "No puede proporcionar file_path junto con content o file_name"
+            )
+
+        try:
+            # Caso 1: Usando file_path
+            if file_path:
+                if not os.path.exists(file_path):
+                    raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
+                
+                # Obtener tamaño y tipo del archivo
+                file_size = os.path.getsize(file_path)
+                if not content_type:
+                    content_type, _ = mimetypes.guess_type(file_path)
+                    if not content_type:
+                        content_type = 'application/octet-stream'
+                
+                # Obtener nombre del archivo
+                file_name = os.path.basename(file_path)
+                
+                # Leer contenido
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+
+            # Caso 2: Usando content+file_name
+            else:
+                file_size = len(content)
+                if not content_type:
+                    content_type, _ = mimetypes.guess_type(file_name)
+                    if not content_type:
+                        content_type = 'application/octet-stream'
+
+            # Para archivos pequeños (<3MB) usar carga directa
+            if file_size <= 3 * 1024 * 1024:
+                encoded_content = base64.b64encode(content).decode()
+                return await self._add_attachment_raw(
+                    message_id=message_id,
+                    name=file_name,
+                    content_bytes=encoded_content,
+                    user_id=user_id,
+                    is_inline=is_inline,
+                    content_type=content_type
+                )
+            
+            # Para archivos grandes usar sesión de carga
+            if file_size > 150 * 1024 * 1024:  # 150MB
+                raise ValueError("El archivo excede el límite máximo de 150MB")
+            
+            session = await self._create_upload_session(
                 message_id=message_id,
                 name=file_name,
-                content_bytes=content_bytes,
+                size=file_size,
                 user_id=user_id,
-                is_inline=is_inline,
-                content_type=content_type
+                is_inline=is_inline
             )
-        
-        # Para archivos grandes (3MB-150MB) usar sesión de carga
-        if file_size > 150 * 1024 * 1024:
-            raise ValueError("El archivo excede el límite máximo de 150MB")
-        
-        # Crear sesión de carga
-        session = await self._create_upload_session(
-            message_id=message_id,
-            name=file_name,
-            size=file_size,
-            user_id=user_id,
-            is_inline=is_inline
-        )
-        
-        # Subir archivo por rangos
-        chunk_size = 4 * 1024 * 1024  # 4MB por chunk
-        with open(file_path, 'rb') as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                
-                start = f.tell() - len(chunk)
-                end = f.tell() - 1
-                total = file_size
+            
+            # Subir por chunks
+            chunk_size = 4 * 1024 * 1024  # 4MB por chunk
+            for start in range(0, file_size, chunk_size):
+                chunk = content[start:start + chunk_size]
+                end = start + len(chunk) - 1
                 
                 await self._upload_chunk(
                     upload_url=session['uploadUrl'],
                     chunk=chunk,
                     start=start,
                     end=end,
-                    total=total
+                    total=file_size
                 )
-        
-        logger.info(f"Adjunto '{file_name}' agregado exitosamente")
-        return session
+            
+            logger.info(f"Adjunto '{file_name}' agregado exitosamente")
+            return session
+            
+        except Exception as e:
+            logger.error(f"Error al agregar adjunto: {str(e)}")
+            raise
 
     async def _create_upload_session(
         self,
@@ -699,6 +740,7 @@ class AsyncMails:
                 
         return processed
     
+    
 class Mails:
     """Clase para manejar operaciones síncronas relacionadas con correos en Microsoft Graph"""
     
@@ -824,87 +866,130 @@ class Mails:
     def add_attachment(
         self,
         message_id: str,
-        file_path: str,
+        file_path: Optional[str] = None,
+        content: Optional[bytes] = None,
+        file_name: Optional[str] = None,
         user_id: Optional[str] = None,
         is_inline: bool = False,
+        content_type: Optional[str] = None,
     ) -> dict:
         """
         Agrega un archivo adjunto a un mensaje de forma simplificada.
         
         Args:
             message_id (str): ID del mensaje
-            file_path (str): Ruta al archivo que se quiere adjuntar 
+            file_path (str, optional): Ruta al archivo que se quiere adjuntar
+            content (bytes, optional): Contenido del archivo en bytes
+            file_name (str, optional): Nombre del archivo cuando se usa content
             user_id (str, optional): ID o userPrincipalName del usuario
             is_inline (bool): Si el adjunto debe mostrarse en línea en el mensaje
+            content_type (str, optional): Tipo MIME del contenido
             
         Returns:
             dict: Información del adjunto creado
             
-        Note:
-            - Para archivos menores a 3MB usa una carga directa
-            - Para archivos entre 3MB y 150MB usa una sesión de carga por rangos
+        Raises:
+            ValueError: Si no se proporciona file_path o content+file_name
+            FileNotFoundError: Si no se encuentra el archivo
+            
+        Example:
+            # Usando ruta de archivo
+            >>> mails.add_attachment(
+            ...     message_id="123",
+            ...     file_path="documento.pdf"
+            ... )
+            
+            # Usando bytes
+            >>> with open('documento.pdf', 'rb') as f:
+            ...     content = f.read()
+            >>> mails.add_attachment(
+            ...     message_id="123",
+            ...     content=content,
+            ...     file_name="documento.pdf"
+            ... )
         """
-        # Validar que el archivo existe
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
-        
-        # Obtener tamaño y tipo del archivo
-        file_size = os.path.getsize(file_path)
-        content_type, _ = mimetypes.guess_type(file_path)
-        if not content_type:
-            content_type = 'application/octet-stream'
-        
-        # Obtener nombre del archivo
-        file_name = os.path.basename(file_path)
-        
-        # Para archivos pequeños (<3MB) usar carga directa
-        if file_size <= 3 * 1024 * 1024:
-            with open(file_path, 'rb') as f:
-                content_bytes = base64.b64encode(f.read()).decode()
-            return self._add_attachment_raw(
+        # Validar que se proporcione al menos una forma de contenido
+        if file_path is None and (content is None or file_name is None):
+            raise ValueError(
+                "Debe proporcionar file_path o la combinación de content y file_name"
+            )
+        if file_path is not None and (content is not None or file_name is not None):
+            raise ValueError(
+                "No puede proporcionar file_path junto con content o file_name"
+            )
+
+        try:
+            # Caso 1: Usando file_path
+            if file_path:
+                if not os.path.exists(file_path):
+                    raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
+                
+                # Obtener tamaño y tipo del archivo
+                file_size = os.path.getsize(file_path)
+                if not content_type:
+                    content_type, _ = mimetypes.guess_type(file_path)
+                    if not content_type:
+                        content_type = 'application/octet-stream'
+                
+                # Obtener nombre del archivo
+                file_name = os.path.basename(file_path)
+                
+                # Leer contenido
+                with open(file_path, 'rb') as f:
+                    content = f.read()
+
+            # Caso 2: Usando content+filename
+            else:
+                file_size = len(content)
+                if not content_type:
+                    content_type, _ = mimetypes.guess_type(file_name)
+                    if not content_type:
+                        content_type = 'application/octet-stream'
+
+            # Para archivos pequeños (<3MB) usar carga directa
+            if file_size <= 3 * 1024 * 1024:
+                encoded_content = base64.b64encode(content).decode()
+                return self._add_attachment_raw(
+                    message_id=message_id,
+                    name=file_name,
+                    content_bytes=encoded_content,
+                    user_id=user_id,
+                    is_inline=is_inline,
+                    content_type=content_type
+                )
+            
+            # Para archivos grandes usar sesión de carga
+            if file_size > 150 * 1024 * 1024:  # 150MB
+                raise ValueError("El archivo excede el límite máximo de 150MB")
+            
+            session = self._create_upload_session(
                 message_id=message_id,
                 name=file_name,
-                content_bytes=content_bytes,
+                size=file_size,
                 user_id=user_id,
-                is_inline=is_inline,
-                content_type=content_type
+                is_inline=is_inline
             )
-        
-        # Para archivos grandes (3MB-150MB) usar sesión de carga
-        if file_size > 150 * 1024 * 1024:
-            raise ValueError("El archivo excede el límite máximo de 150MB")
-        
-        # Crear sesión de carga
-        session = self._create_upload_session(
-            message_id=message_id,
-            name=file_name,
-            size=file_size,
-            user_id=user_id,
-            is_inline=is_inline
-        )
-        
-        # Subir archivo por rangos
-        chunk_size = 4 * 1024 * 1024  # 4MB por chunk
-        with open(file_path, 'rb') as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                
-                start = f.tell() - len(chunk)
-                end = f.tell() - 1
-                total = file_size
+            
+            # Subir por chunks
+            chunk_size = 4 * 1024 * 1024  # 4MB por chunk
+            for start in range(0, file_size, chunk_size):
+                chunk = content[start:start + chunk_size]
+                end = start + len(chunk) - 1
                 
                 self._upload_chunk(
                     upload_url=session['uploadUrl'],
                     chunk=chunk,
                     start=start,
                     end=end,
-                    total=total
+                    total=file_size
                 )
-        
-        logger.info(f"Adjunto '{file_name}' agregado exitosamente")
-        return session
+            
+            logger.info(f"Adjunto '{file_name}' agregado exitosamente")
+            return session
+            
+        except Exception as e:
+            logger.error(f"Error al agregar adjunto: {str(e)}")
+            raise
 
     def _create_upload_session(
         self,
@@ -974,22 +1059,28 @@ class Mails:
             if not self.client.token:
                 self.client.get_token()
                 
-            # Validaciones igual que AsyncMails
+            # Validar que se proporcione user_id con client credentials
             if not user_id and not self.client.is_delegated:
                 raise ValueError(
                     "Debe proporcionar user_id cuando usa client credentials. "
                     "Para acceder a /me use autenticación delegada"
                 )
                 
+            # Validar parámetros
             if not message_id:
                 raise ValueError("Debe proporcionar message_id")
                 
-            # Construir URL
+            # Validar tamaño del adjunto
+            if content_bytes and len(content_bytes) > 3 * 1024 * 1024:  # 3MB
+                raise ValueError("El adjunto excede el límite de 3MB")
+                
+            # Construir URL base
             if user_id:
                 base_url = f"{self.client.base_url}/users/{user_id}"
             else:
                 base_url = f"{self.client.base_url}/me"
                 
+            # Construir URL final
             url = f"{base_url}/messages/{message_id}/attachments"
                 
             # Datos del adjunto
@@ -1208,6 +1299,16 @@ class Mails:
         Args:
             message_id (str): ID del mensaje en borrador
             user_id (str, optional): ID o userPrincipalName del usuario
+            
+        Raises:
+            ValueError: Si no se proporciona message_id
+            PermissionError: Si no se tienen los permisos necesarios
+            
+        Example:
+            >>> mails.send_message(
+            ...     message_id="123",
+            ...     user_id="user@domain.com"
+            ... )
         """
         try:
             if not self.client.token:

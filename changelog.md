@@ -1,13 +1,30 @@
 # Changelog
 
+## [0.1.3] - 10-02-2025
+
+### Mejorado
+
+- **Módulo `Mails`:** Funcionalidad extendida
+  - **`add_attachment`:** Ahora soporta adjuntar archivos por ruta o bytes
+  - Detección automática de tipo MIME
+  - Manejo unificado de archivos grandes
+
+
 ## [0.1.2] - 12-02-2025
 
 ### Añadido
 
 - **Módulo `Drives`:** Implementación síncrona completada
+
   - **`create_folder`:** Crea carpetas con manejo de conflictos y permisos
   - Soporte para crear en raíz o subcarpetas
   - Validación de parámetros y manejo de errores mejorado
+
+- **Módulo `Mails`:** Nuevas funcionalidades
+  - **`add_attachment_bytes`:** Permite adjuntar archivos usando bytes directamente
+  - Soporte para archivos grandes usando sesiones de carga
+  - Detección automática de tipo MIME
+
 
 ## [0.1.1] - 11-02-2025
 
